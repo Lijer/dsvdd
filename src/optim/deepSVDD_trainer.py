@@ -2,7 +2,7 @@ from base.base_trainer import BaseTrainer
 from base.base_dataset import BaseADDataset
 from base.base_net import BaseNet
 from torch.utils.data.dataloader import DataLoader
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 import logging
 import time
@@ -33,6 +33,7 @@ class DeepSVDDTrainer(BaseTrainer):
         # Results
         self.train_time = None
         self.test_auc = None
+        self.test_ap = None
         self.test_time = None
         self.test_scores = None
 
@@ -43,7 +44,8 @@ class DeepSVDDTrainer(BaseTrainer):
         net = net.to(self.device)
 
         # Get train data loader
-        train_loader, _ = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
+        # train_loader, _ = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
+        train_loader = dataset[0]
 
         # Set optimizer (Adam optimizer for now)
         optimizer = optim.Adam(net.parameters(), lr=self.lr, weight_decay=self.weight_decay,
@@ -73,6 +75,8 @@ class DeepSVDDTrainer(BaseTrainer):
             epoch_start_time = time.time()
             for data in train_loader:
                 inputs, _, _ = data
+                # inputs= data
+
                 inputs = inputs.to(self.device)
 
                 # Zero the network parameter gradients
@@ -115,7 +119,8 @@ class DeepSVDDTrainer(BaseTrainer):
         net = net.to(self.device)
 
         # Get test data loader
-        _, test_loader = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
+        # _, test_loader = dataset.loaders(batch_size=self.batch_size, num_workers=self.n_jobs_dataloader)
+        test_loader = dataset[1]
 
         # Testing
         logger.info('Starting testing...')
@@ -149,6 +154,7 @@ class DeepSVDDTrainer(BaseTrainer):
         scores = np.array(scores)
 
         self.test_auc = roc_auc_score(labels, scores)
+        self.test_ap = average_precision_score(labels, scores)
         logger.info('Test set AUC: {:.2f}%'.format(100. * self.test_auc))
 
         logger.info('Finished testing.')

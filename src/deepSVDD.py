@@ -7,6 +7,9 @@ from optim.deepSVDD_trainer import DeepSVDDTrainer
 from optim.ae_trainer import AETrainer
 
 
+
+
+
 class DeepSVDD(object):
     """A class for the Deep SVDD method.
 
@@ -48,14 +51,16 @@ class DeepSVDD(object):
         self.results = {
             'train_time': None,
             'test_auc': None,
+            'test_ap':None,
             'test_time': None,
             'test_scores': None,
         }
 
-    def set_network(self, net_name):
+    def set_network(self, net_name, input_dim = 32, rep_dim = 128):
         """Builds the neural network \phi."""
         self.net_name = net_name
-        self.net = build_network(net_name)
+        self.net = build_network(net_name, input_dim, rep_dim)
+        print(str(self.net))
 
     def train(self, dataset: BaseADDataset, optimizer_name: str = 'adam', lr: float = 0.001, n_epochs: int = 50,
               lr_milestones: tuple = (), batch_size: int = 128, weight_decay: float = 1e-6, device: str = 'cuda',
@@ -82,9 +87,12 @@ class DeepSVDD(object):
         self.trainer.test(dataset, self.net)
         # Get results
         self.results['test_auc'] = self.trainer.test_auc
+        self.results['test_ap'] = self.trainer.test_ap
         self.results['test_time'] = self.trainer.test_time
         self.results['test_scores'] = self.trainer.test_scores
 
+
+    #! 预训练
     def pretrain(self, dataset: BaseADDataset, optimizer_name: str = 'adam', lr: float = 0.001, n_epochs: int = 100,
                  lr_milestones: tuple = (), batch_size: int = 128, weight_decay: float = 1e-6, device: str = 'cuda',
                  n_jobs_dataloader: int = 0):
@@ -112,7 +120,7 @@ class DeepSVDD(object):
         # Load the new state_dict
         self.net.load_state_dict(net_dict)
 
-    def save_model(self, export_model, save_ae=True):
+    def save_model(self, export_model, save_ae=False):
         """Save Deep SVDD model to export_model."""
 
         net_dict = self.net.state_dict()

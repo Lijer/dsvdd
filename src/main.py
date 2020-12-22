@@ -3,20 +3,38 @@ import torch
 import logging
 import random
 import numpy as np
+import os
 
 from utils.config import Config
 from utils.visualization.plot_images_grid import plot_images_grid
 from deepSVDD import DeepSVDD
 from datasets.main import load_dataset
 
+def para_dim(name):
+    idx = 0
+    data_list = ["apascal", "bank-additional-full_normalised",'lung-1vs5', "probe",'secom',"u2r",'ad','census','creditcard',
+             'aid362', 'backdoor', 'celeba', 'chess', 'cmc', 'r10', 'sf', 'w7a']
+    out_c_list = [50, 50, 128, 16, 64, 16, 128, 50, 15, 
+                50, 64, 16, 16, 4, 32, 8, 64]
+    c_in_list = [64, 62, 3312, 34, 590, 34, 1558, 511, 30, 114, 208, 39, 23, 8, 100, 19, 300]
+    while 1:
+        if name == data_list[idx]:
+            break
+        else:
+            idx+=1
+    return c_in_list[idx], out_c_list[idx]
 
+def writeResults(name, auc, ap, path = "../res/performance.csv"):    
+    csv_file = open(path, 'a') 
+    row = name + "," + str(auc) + "," + str(ap) + "\n"
+    csv_file.write(row)
 ################################################################################
 # Settings
 ################################################################################
 @click.command()
-@click.argument('dataset_name', type=click.Choice(['mnist', 'cifar10']))
-@click.argument('net_name', type=click.Choice(['mnist_LeNet', 'cifar10_LeNet', 'cifar10_LeNet_ELU']))
-@click.argument('xp_path', type=click.Path(exists=True))
+@click.argument('dataset_name', type=str)
+@click.argument('net_name', type=click.Choice(['mnist_LeNet', 'cifar10_LeNet', 'cifar10_LeNet_ELU', 'mlp']))
+@click.argument('xp_path', type=str)
 @click.argument('data_path', type=click.Path(exists=True))
 @click.option('--load_config', type=click.Path(exists=True), default=None,
               help='Config JSON-file path (default: None).')
@@ -64,6 +82,14 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     :arg XP_PATH: Export path for logging the experiment.
     :arg DATA_PATH: Root path of data.
     """
+    xp_path = '../log/{}'.format(dataset_name.split('.')[0])
+    print(xp_path)
+    # if os.path.exists('..log'):
+    print(os.path.exists('../log'))
+    if not os.path.exists(xp_path):
+        os.mkdir(xp_path)
+    
+    input_dim, rep_dim = para_dim(dataset_name.split('.')[0])
 
     # Get configuration
     cfg = Config(locals().copy())
@@ -73,7 +99,7 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    log_file = xp_path + '/log.txt'
+    log_file = xp_path + '/{}_log.txt'.format(dataset_name.split('.')[0])
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(formatter)
@@ -111,82 +137,85 @@ def main(dataset_name, net_name, xp_path, data_path, load_config, load_model, ob
     logger.info('Number of dataloader workers: %d' % n_jobs_dataloader)
 
     # Load data
-    dataset = load_dataset(dataset_name, data_path, normal_class)
+    dataset = load_dataset(dataset_name, data_path, normal_class, batch_size = batch_size)
+    for _ in range(10):
+        # Initialize DeepSVDD model and set neural network \phi
+        deep_SVDD = DeepSVDD(cfg.settings['objective'], cfg.settings['nu'])
+        deep_SVDD.set_network(net_name, input_dim= input_dim, rep_dim = rep_dim)
 
-    # Initialize DeepSVDD model and set neural network \phi
-    deep_SVDD = DeepSVDD(cfg.settings['objective'], cfg.settings['nu'])
-    deep_SVDD.set_network(net_name)
-    # If specified, load Deep SVDD model (radius R, center c, network weights, and possibly autoencoder weights)
-    if load_model:
-        deep_SVDD.load_model(model_path=load_model, load_ae=True)
-        logger.info('Loading model from %s.' % load_model)
+        # If specified, load Deep SVDD model (radius R, center c, network weights, and possibly autoencoder weights)
+        if load_model:
+            deep_SVDD.load_model(model_path=load_model, load_ae=True)
+            logger.info('Loading model from %s.' % load_model)
 
-    logger.info('Pretraining: %s' % pretrain)
-    if pretrain:
-        # Log pretraining details
-        logger.info('Pretraining optimizer: %s' % cfg.settings['ae_optimizer_name'])
-        logger.info('Pretraining learning rate: %g' % cfg.settings['ae_lr'])
-        logger.info('Pretraining epochs: %d' % cfg.settings['ae_n_epochs'])
-        logger.info('Pretraining learning rate scheduler milestones: %s' % (cfg.settings['ae_lr_milestone'],))
-        logger.info('Pretraining batch size: %d' % cfg.settings['ae_batch_size'])
-        logger.info('Pretraining weight decay: %g' % cfg.settings['ae_weight_decay'])
+        logger.info('Pretraining: %s' % pretrain)
+        if pretrain:
+            # Log pretraining details
+            logger.info('Pretraining optimizer: %s' % cfg.settings['ae_optimizer_name'])
+            logger.info('Pretraining learning rate: %g' % cfg.settings['ae_lr'])
+            logger.info('Pretraining epochs: %d' % cfg.settings['ae_n_epochs'])
+            logger.info('Pretraining learning rate scheduler milestones: %s' % (cfg.settings['ae_lr_milestone'],))
+            logger.info('Pretraining batch size: %d' % cfg.settings['ae_batch_size'])
+            logger.info('Pretraining weight decay: %g' % cfg.settings['ae_weight_decay'])
 
-        # Pretrain model on dataset (via autoencoder)
-        deep_SVDD.pretrain(dataset,
-                           optimizer_name=cfg.settings['ae_optimizer_name'],
-                           lr=cfg.settings['ae_lr'],
-                           n_epochs=cfg.settings['ae_n_epochs'],
-                           lr_milestones=cfg.settings['ae_lr_milestone'],
-                           batch_size=cfg.settings['ae_batch_size'],
-                           weight_decay=cfg.settings['ae_weight_decay'],
-                           device=device,
-                           n_jobs_dataloader=n_jobs_dataloader)
+            # Pretrain model on dataset (via autoencoder)
+            deep_SVDD.pretrain(dataset,
+                            optimizer_name=cfg.settings['ae_optimizer_name'],
+                            lr=cfg.settings['ae_lr'],
+                            n_epochs=cfg.settings['ae_n_epochs'],
+                            lr_milestones=cfg.settings['ae_lr_milestone'],
+                            batch_size=cfg.settings['ae_batch_size'],
+                            weight_decay=cfg.settings['ae_weight_decay'],
+                            device=device,
+                            n_jobs_dataloader=n_jobs_dataloader)
 
-    # Log training details
-    logger.info('Training optimizer: %s' % cfg.settings['optimizer_name'])
-    logger.info('Training learning rate: %g' % cfg.settings['lr'])
-    logger.info('Training epochs: %d' % cfg.settings['n_epochs'])
-    logger.info('Training learning rate scheduler milestones: %s' % (cfg.settings['lr_milestone'],))
-    logger.info('Training batch size: %d' % cfg.settings['batch_size'])
-    logger.info('Training weight decay: %g' % cfg.settings['weight_decay'])
+        # Log training details
+        logger.info('Training optimizer: %s' % cfg.settings['optimizer_name'])
+        logger.info('Training learning rate: %g' % cfg.settings['lr'])
+        logger.info('Training epochs: %d' % cfg.settings['n_epochs'])
+        logger.info('Training learning rate scheduler milestones: %s' % (cfg.settings['lr_milestone'],))
+        logger.info('Training batch size: %d' % cfg.settings['batch_size'])
+        logger.info('Training weight decay: %g' % cfg.settings['weight_decay'])
 
-    # Train model on dataset
-    deep_SVDD.train(dataset,
-                    optimizer_name=cfg.settings['optimizer_name'],
-                    lr=cfg.settings['lr'],
-                    n_epochs=cfg.settings['n_epochs'],
-                    lr_milestones=cfg.settings['lr_milestone'],
-                    batch_size=cfg.settings['batch_size'],
-                    weight_decay=cfg.settings['weight_decay'],
-                    device=device,
-                    n_jobs_dataloader=n_jobs_dataloader)
+        # Train model on dataset
+        deep_SVDD.train(dataset,
+                        optimizer_name=cfg.settings['optimizer_name'],
+                        lr=cfg.settings['lr'],
+                        n_epochs=cfg.settings['n_epochs'],
+                        lr_milestones=cfg.settings['lr_milestone'],
+                        batch_size=cfg.settings['batch_size'],
+                        weight_decay=cfg.settings['weight_decay'],
+                        device=device,
+                        n_jobs_dataloader=n_jobs_dataloader)
 
-    # Test model
-    deep_SVDD.test(dataset, device=device, n_jobs_dataloader=n_jobs_dataloader)
+        # Test model
+        deep_SVDD.test(dataset, device=device, n_jobs_dataloader=n_jobs_dataloader)
+        
+        # Plot most anomalous and most normal (within-class) test samples
+        # indices, labels, scores = zip(*deep_SVDD.results['test_scores'])
+        # indices, labels, scores = np.array(indices), np.array(labels), np.array(scores)
+        # idx_sorted = indices[labels == 0][np.argsort(scores[labels == 0])]  # sorted from lowest to highest anomaly score
 
-    # Plot most anomalous and most normal (within-class) test samples
-    indices, labels, scores = zip(*deep_SVDD.results['test_scores'])
-    indices, labels, scores = np.array(indices), np.array(labels), np.array(scores)
-    idx_sorted = indices[labels == 0][np.argsort(scores[labels == 0])]  # sorted from lowest to highest anomaly score
+        # if dataset_name in ('mnist', 'cifar10'):
 
-    if dataset_name in ('mnist', 'cifar10'):
+        #     if dataset_name == 'mnist':
+        #         X_normals = dataset.test_set.test_data[idx_sorted[:32], ...].unsqueeze(1)
+        #         X_outliers = dataset.test_set.test_data[idx_sorted[-32:], ...].unsqueeze(1)
 
-        if dataset_name == 'mnist':
-            X_normals = dataset.test_set.test_data[idx_sorted[:32], ...].unsqueeze(1)
-            X_outliers = dataset.test_set.test_data[idx_sorted[-32:], ...].unsqueeze(1)
+        #     if dataset_name == 'cifar10':
+        #         X_normals = torch.tensor(np.transpose(dataset.test_set.test_data[idx_sorted[:32], ...], (0, 3, 1, 2)))
+        #         X_outliers = torch.tensor(np.transpose(dataset.test_set.test_data[idx_sorted[-32:], ...], (0, 3, 1, 2)))
 
-        if dataset_name == 'cifar10':
-            X_normals = torch.tensor(np.transpose(dataset.test_set.test_data[idx_sorted[:32], ...], (0, 3, 1, 2)))
-            X_outliers = torch.tensor(np.transpose(dataset.test_set.test_data[idx_sorted[-32:], ...], (0, 3, 1, 2)))
-
-        plot_images_grid(X_normals, export_img=xp_path + '/normals', title='Most normal examples', padding=2)
-        plot_images_grid(X_outliers, export_img=xp_path + '/outliers', title='Most anomalous examples', padding=2)
-
-    # Save results, model, and configuration
-    deep_SVDD.save_results(export_json=xp_path + '/results.json')
-    deep_SVDD.save_model(export_model=xp_path + '/model.tar')
-    cfg.save_config(export_json=xp_path + '/config.json')
-
+            # plot_images_grid(X_normals, export_img=xp_path + '/normals', title='Most normal examples', padding=2)
+            # plot_images_grid(X_outliers, export_img=xp_path + '/outliers', title='Most anomalous examples', padding=2)
+        
+        data_name = dataset_name.split('.')[0]
+        # Save results, model, and configuration
+        deep_SVDD.save_results(export_json=xp_path + '/{}_results.json'.format(data_name))
+        deep_SVDD.save_model(export_model=xp_path + '/{}_model.tar'.format(data_name))
+        cfg.save_config(export_json=xp_path + '/{}_config.json'.format(data_name))
+        writeResults(data_name, deep_SVDD.results['test_auc'], deep_SVDD.results['test_ap'])  
+    
 
 if __name__ == '__main__':
     main()
